@@ -147,7 +147,7 @@ func process(path string, writeTag bool, minBPM int, maxBPM int, preferMin int, 
 }
 
 func formatAlternatives(candidates []bpm.Candidate, showScores bool) string {
-	limit := min(4, len(candidates))
+	limit := len(candidates)
 	parts := make([]string, 0, limit-1)
 	for i := 1; i < limit; i++ {
 		if showScores {

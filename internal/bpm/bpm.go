@@ -65,7 +65,7 @@ func Analyze(samples []float64, sampleRate int, opts Options) (Analysis, error) 
 	return Analysis{
 		BPM:          candidates[0].BPM,
 		Confidence:   confidence(candidates),
-		Alternatives: candidates[:min(5, len(candidates))],
+		Alternatives: candidates[:min(8, len(candidates))],
 	}, nil
 }
 
@@ -178,10 +178,43 @@ func tempoCandidates(envelope []float64, envelopeRate float64, opts Options) ([]
 			}
 		}
 	}
+	distinct = appendRelatedTactusCandidates(distinct, raw)
 	if len(distinct) == 0 || distinct[0].Score <= 0 {
 		return nil, fmt.Errorf("could not find a stable tempo")
 	}
 	return distinct, nil
+}
+
+func appendRelatedTactusCandidates(candidates []Candidate, raw []Candidate) []Candidate {
+	for _, candidate := range candidates[:min(3, len(candidates))] {
+		if candidate.BPM >= 90 {
+			continue
+		}
+		candidates = appendCandidateNear(candidates, raw, candidate.BPM*4.0/3.0)
+		candidates = appendCandidateNear(candidates, raw, candidate.BPM*2.0)
+	}
+	return candidates
+}
+
+func appendCandidateNear(candidates []Candidate, raw []Candidate, target float64) []Candidate {
+	if target <= 0 {
+		return candidates
+	}
+	for _, candidate := range candidates {
+		if math.Abs(candidate.BPM-target)/target <= 0.04 {
+			return candidates
+		}
+	}
+
+	bestIndex := nearestTempoIndex(raw, target)
+	if bestIndex < 0 || bestIndex >= len(raw) {
+		return candidates
+	}
+	related := raw[bestIndex]
+	if math.Abs(related.BPM-target)/target > 0.04 {
+		return candidates
+	}
+	return append(candidates, related)
 }
 
 func scoreTempo(envelope []float64, envelopeRate float64, tempo float64) (float64, float64) {
@@ -346,6 +379,19 @@ func chooseMusicalTactus(candidates []Candidate) []Candidate {
 	}
 
 	best := candidates[0]
+	if best.BPM >= 145 {
+		halfIndex := relatedCandidate(candidates, best.BPM/2, 0.08)
+		compoundIndex := relatedCandidate(candidates, best.BPM*2.0/3.0, 0.08)
+		if halfIndex >= 0 && compoundIndex >= 0 {
+			half := candidates[halfIndex]
+			compound := candidates[compoundIndex]
+			if half.Score >= best.Score*0.60 &&
+				compound.Score >= best.Score*0.60 &&
+				compound.Score >= half.Score*0.60 {
+				return promoteCandidate(candidates, compoundIndex)
+			}
+		}
+	}
 	if best.BPM >= 90 {
 		return candidates
 	}
@@ -353,8 +399,8 @@ func chooseMusicalTactus(candidates []Candidate) []Candidate {
 	doubleIndex := relatedCandidate(candidates, best.BPM*2, 0.08)
 	compoundIndex := relatedCandidate(candidates, best.BPM*4.0/3.0, 0.08)
 
-	if compoundIndex >= 0 && candidates[compoundIndex].Score >= best.Score*0.55 {
-		if doubleIndex < 0 || candidates[compoundIndex].Score >= candidates[doubleIndex].Score*0.90 {
+	if compoundIndex >= 0 && candidates[compoundIndex].Score >= best.Score*0.35 {
+		if doubleIndex < 0 || candidates[compoundIndex].Score >= candidates[doubleIndex].Score*0.70 {
 			return promoteCandidate(candidates, compoundIndex)
 		}
 	}

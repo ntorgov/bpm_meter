@@ -78,6 +78,35 @@ func TestChooseMusicalTactusPrefersCompoundMeterWhenItBeatsDouble(t *testing.T) 
 	}
 }
 
+func TestChooseMusicalTactusPrefersCompoundMeterEvenWhenDoubleIsProminent(t *testing.T) {
+	candidates := []Candidate{
+		{BPM: 84.8, Score: 1.00},
+		{BPM: 169.6, Score: 0.71},
+		{BPM: 113.0, Score: 0.50},
+	}
+
+	got := chooseMusicalTactus(candidates)
+
+	if got[0].BPM != 113.0 {
+		t.Fatalf("got %.1f BPM, want 113.0", got[0].BPM)
+	}
+}
+
+func TestChooseMusicalTactusPrefersCompoundMeterFromFastCandidate(t *testing.T) {
+	candidates := []Candidate{
+		{BPM: 170.0, Score: 1.00},
+		{BPM: 84.8, Score: 0.99},
+		{BPM: 166.8, Score: 0.70},
+		{BPM: 112.2, Score: 0.64},
+	}
+
+	got := chooseMusicalTactus(candidates)
+
+	if got[0].BPM != 112.2 {
+		t.Fatalf("got %.1f BPM, want 112.2", got[0].BPM)
+	}
+}
+
 func TestChooseMusicalTactusKeepsStrongSlowTempo(t *testing.T) {
 	candidates := []Candidate{
 		{BPM: 82, Score: 1.00},
@@ -88,6 +117,24 @@ func TestChooseMusicalTactusKeepsStrongSlowTempo(t *testing.T) {
 
 	if got[0].BPM != 82 {
 		t.Fatalf("got %.1f BPM, want 82.0", got[0].BPM)
+	}
+}
+
+func TestAppendRelatedTactusCandidatesKeepsCompoundCandidate(t *testing.T) {
+	candidates := []Candidate{
+		{BPM: 84.8, Score: 1.00},
+		{BPM: 169.6, Score: 0.71},
+	}
+	raw := []Candidate{
+		{BPM: 84.8, Score: 1.00},
+		{BPM: 169.6, Score: 0.71},
+		{BPM: 113.0, Score: 0.50},
+	}
+
+	got := appendRelatedTactusCandidates(candidates, raw)
+
+	if relatedCandidate(got, 113.0, 0.01) < 0 {
+		t.Fatalf("expected 113 BPM compound candidate in %v", got)
 	}
 }
 

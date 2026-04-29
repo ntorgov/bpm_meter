@@ -19,18 +19,23 @@ import (
 )
 
 type result struct {
-	Path string
-	BPM  int
-	Err  error
+	Path         string
+	BPM          int
+	Confidence   float64
+	Alternatives []bpm.Candidate
+	Err          error
 }
 
 func main() {
 	var (
-		root      = flag.String("path", ".", "file or directory to scan")
-		writeTags = flag.Bool("write", false, "write detected BPM to the ID3 TBPM tag")
-		workers   = flag.Int("workers", max(1, runtime.NumCPU()-1), "number of files to process in parallel")
-		minBPM    = flag.Int("min", 70, "minimum BPM to search")
-		maxBPM    = flag.Int("max", 190, "maximum BPM to search")
+		root       = flag.String("path", ".", "file or directory to scan")
+		writeTags  = flag.Bool("write", false, "write detected BPM to the ID3 TBPM tag")
+		workers    = flag.Int("workers", max(1, runtime.NumCPU()-1), "number of files to process in parallel")
+		minBPM     = flag.Int("min", 70, "minimum BPM to search")
+		maxBPM     = flag.Int("max", 190, "maximum BPM to search")
+		preferMin  = flag.Int("prefer-min", 0, "prefer this minimum BPM after musical tempo detection; use 0 to disable")
+		preferMax  = flag.Int("prefer-max", 0, "prefer this maximum BPM after musical tempo detection; use 0 to disable")
+		showScores = flag.Bool("scores", false, "show candidate scores with alternatives")
 	)
 	flag.Parse()
 
@@ -53,7 +58,7 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Found %d MP3 file(s). write=%t range=%d-%d\n", len(files), *writeTags, *minBPM, *maxBPM)
+	fmt.Printf("Found %d MP3 file(s). write=%t range=%d-%d prefer=%d-%d\n", len(files), *writeTags, *minBPM, *maxBPM, *preferMin, *preferMax)
 
 	jobs := make(chan string)
 	results := make(chan result)
@@ -64,7 +69,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for path := range jobs {
-				results <- process(path, *writeTags, *minBPM, *maxBPM)
+				results <- process(path, *writeTags, *minBPM, *maxBPM, *preferMin, *preferMax)
 			}
 		}()
 	}
@@ -89,7 +94,11 @@ func main() {
 		if *writeTags {
 			action = "wrote"
 		}
-		fmt.Printf("OK   %3d BPM  %-5s %s\n", res.BPM, action, res.Path)
+		line := fmt.Sprintf("OK   %3d BPM  conf=%.2f  %-5s %s", res.BPM, res.Confidence, action, res.Path)
+		if len(res.Alternatives) > 1 {
+			line += "  alt=" + formatAlternatives(res.Alternatives, *showScores)
+		}
+		fmt.Println(line)
 	}
 
 	if failed > 0 {
@@ -97,7 +106,7 @@ func main() {
 	}
 }
 
-func process(path string, writeTag bool, minBPM int, maxBPM int) result {
+func process(path string, writeTag bool, minBPM int, maxBPM int, preferMin int, preferMax int) result {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -106,19 +115,48 @@ func process(path string, writeTag bool, minBPM int, maxBPM int) result {
 		return result{Path: path, Err: err}
 	}
 
-	tempo, err := bpm.Estimate(samples, sampleRate, bpm.Options{Min: minBPM, Max: maxBPM})
+	analysis, err := bpm.Analyze(samples, sampleRate, bpm.Options{
+		Min:       minBPM,
+		Max:       maxBPM,
+		PreferMin: preferMin,
+		PreferMax: preferMax,
+	})
 	if err != nil {
 		return result{Path: path, Err: err}
 	}
 
-	rounded := int(tempo + 0.5)
+	rounded := int(analysis.BPM + 0.5)
 	if writeTag {
 		if err := id3.WriteTBPM(path, rounded); err != nil {
-			return result{Path: path, BPM: rounded, Err: err}
+			return result{
+				Path:         path,
+				BPM:          rounded,
+				Confidence:   analysis.Confidence,
+				Alternatives: analysis.Alternatives,
+				Err:          err,
+			}
 		}
 	}
 
-	return result{Path: path, BPM: rounded}
+	return result{
+		Path:         path,
+		BPM:          rounded,
+		Confidence:   analysis.Confidence,
+		Alternatives: analysis.Alternatives,
+	}
+}
+
+func formatAlternatives(candidates []bpm.Candidate, showScores bool) string {
+	limit := min(4, len(candidates))
+	parts := make([]string, 0, limit-1)
+	for i := 1; i < limit; i++ {
+		if showScores {
+			parts = append(parts, fmt.Sprintf("%.1f:%.2f", candidates[i].BPM, candidates[i].Score))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%.1f", candidates[i].BPM))
+	}
+	return strings.Join(parts, ",")
 }
 
 func collectMP3s(root string) ([]string, error) {
@@ -150,7 +188,7 @@ func collectMP3s(root string) ([]string, error) {
 }
 
 func decodeWithFFmpeg(ctx context.Context, path string) ([]float64, int, error) {
-	const sampleRate = 11025
+	const sampleRate = 22050
 
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-v", "error",
